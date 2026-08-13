@@ -19,6 +19,9 @@ UOM_MAP = {
 
     "C": "C",
     "M": "M",
+
+    "PK": "PK",
+    "LOT": "LOT",
 }
 
 
@@ -63,6 +66,9 @@ def get_uom_multiplier(uom: Optional[str]) -> Optional[int]:
         "BOXES": 1,
         "SET": 1,
         "SETS": 1,
+        "PK": 1,
+        "LOT": 1,
+
         "C": 100,
         "M": 1000,
     }

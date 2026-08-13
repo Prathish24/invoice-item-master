@@ -1,12 +1,13 @@
+import json
 import sys
 from pathlib import Path
 
 import streamlit as st
 
 
-# --------------------------------------------------
-# Project path
-# --------------------------------------------------
+# ============================================================
+# PROJECT PATH
+# ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -14,45 +15,81 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+# ============================================================
+# IMPORTS
+# ============================================================
+
 from src.pipeline import process_invoice
 from src.validation.invoice_validator import validate_invoice
+
 from src.export.item_master_export import (
     build_item_master_csv,
     build_item_master_workbook,
 )
+
 from src.database.db import (
     initialize_database,
     save_invoice_result,
     approve_invoice,
     get_export_rows,
+    get_all_invoices,
 )
 
 
-# --------------------------------------------------
-# Standard Item Master fields
-# --------------------------------------------------
-#
-# (field key, display label, input kind). This is the full set
-# of possible fields — which of them actually get shown for a
-# given invoice is decided dynamically per invoice, based on
-# what that invoice's extracted data actually contains.
+# ============================================================
+# STANDARD ITEM MASTER FIELDS
+# ============================================================
 
 ITEM_MASTER_FIELDS = [
-    ("manufacturer_part_number", "Manufacturer Part Number", "text"),
-    ("vendor_part_number", "Vendor Part Number", "text"),
-    ("description", "Description", "text"),
-    ("uom", "UOM", "text"),
-    ("quantity_shipped", "Qty Ship", "quantity"),
-    ("unit_price_usd", "Unit Price USD", "money"),
-    ("extended_price_usd", "Extended Price USD", "money"),
+    (
+        "manufacturer_part_number",
+        "Manufacturer Part Number",
+        "text",
+    ),
+    (
+        "vendor_part_number",
+        "Vendor Part Number",
+        "text",
+    ),
+    (
+        "description",
+        "Description",
+        "text",
+    ),
+    (
+        "uom",
+        "UOM",
+        "text",
+    ),
+    (
+        "quantity_shipped",
+        "Qty Ship",
+        "quantity",
+    ),
+    (
+        "unit_price_usd",
+        "Unit Price USD",
+        "money",
+    ),
+    (
+        "extended_price_usd",
+        "Extended Price USD",
+        "money",
+    ),
 ]
 
 
-def _any_line_item_has_value(
+# ============================================================
+# HELPER
+# ============================================================
+
+def any_line_item_has_value(
     line_items: list[dict],
     field: str,
 ) -> bool:
-    """True if at least one line item has a real value for field."""
+    """
+    Return True if at least one line item has a real value.
+    """
 
     for item in line_items:
 
@@ -64,9 +101,9 @@ def _any_line_item_has_value(
     return False
 
 
-# --------------------------------------------------
-# Page configuration
-# --------------------------------------------------
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
 
 st.set_page_config(
     page_title="Invoice Item Master",
@@ -75,33 +112,30 @@ st.set_page_config(
 )
 
 
-# --------------------------------------------------
-# Initialize database
-# --------------------------------------------------
+# ============================================================
+# INITIALIZE DATABASE
+# ============================================================
 
 initialize_database()
 
 
-# --------------------------------------------------
-# Session state
-# --------------------------------------------------
+# ============================================================
+# SESSION STATE
+# ============================================================
 
-if "processed_invoice" not in st.session_state:
-    st.session_state.processed_invoice = None
+if "selected_invoice_id" not in st.session_state:
+    st.session_state.selected_invoice_id = None
 
-if "pdf_path" not in st.session_state:
-    st.session_state.pdf_path = None
-
-if "invoice_id" not in st.session_state:
-    st.session_state.invoice_id = None
+if "processed_batch_ids" not in st.session_state:
+    st.session_state.processed_batch_ids = []
 
 if "invoice_approved" not in st.session_state:
     st.session_state.invoice_approved = False
 
 
-# --------------------------------------------------
-# Header
-# --------------------------------------------------
+# ============================================================
+# HEADER
+# ============================================================
 
 st.title("📄 Invoice Item Master")
 
@@ -111,9 +145,9 @@ st.write(
 )
 
 
-# --------------------------------------------------
-# Upload invoices
-# --------------------------------------------------
+# ============================================================
+# UPLOAD INVOICES
+# ============================================================
 
 uploaded_files = st.file_uploader(
     "Upload Invoice PDFs",
@@ -122,350 +156,909 @@ uploaded_files = st.file_uploader(
 )
 
 
-# --------------------------------------------------
-# Process invoices
-# --------------------------------------------------
+# ============================================================
+# PROCESS MULTIPLE INVOICES
+# ============================================================
 
 if uploaded_files:
 
-    st.write(f"Selected invoices: **{len(uploaded_files)}**")
+    st.write(
+        f"Selected invoices: **{len(uploaded_files)}**"
+    )
 
-    if st.button("🚀 Process Invoices"):
+    if st.button(
+        "🚀 Process Invoices",
+        type="primary",
+    ):
 
-        input_dir = PROJECT_ROOT / "data" / "input" / "invoices"
-        input_dir.mkdir(parents=True, exist_ok=True)
+        input_dir = (
+            PROJECT_ROOT
+            / "data"
+            / "input"
+            / "invoices"
+        )
+
+        input_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         progress = st.progress(0)
 
-        for index, uploaded_file in enumerate(uploaded_files):
+        current_batch_ids = []
 
-            st.write(f"Processing: **{uploaded_file.name}**")
+        for index, uploaded_file in enumerate(
+            uploaded_files
+        ):
 
-            pdf_path = input_dir / uploaded_file.name
+            st.write(
+                f"Processing: **{uploaded_file.name}**"
+            )
 
-            with open(pdf_path, "wb") as file:
-                file.write(uploaded_file.getbuffer())
+            pdf_path = (
+                input_dir
+                / uploaded_file.name
+            )
 
             try:
 
-                result = process_invoice(pdf_path)
+                # ------------------------------------------------
+                # Save PDF
+                # ------------------------------------------------
 
-                invoice_id = save_invoice_result(result)
+                with open(
+                    pdf_path,
+                    "wb",
+                ) as file:
 
-                if result["success"]:
+                    file.write(
+                        uploaded_file.getbuffer()
+                    )
 
-                    st.session_state.processed_invoice = result
-                    st.session_state.pdf_path = pdf_path
-                    st.session_state.invoice_id = invoice_id
-                    st.session_state.invoice_approved = False
+                # ------------------------------------------------
+                # Process invoice
+                # ------------------------------------------------
 
-                    status = result["validation"]["status"]
+                result = process_invoice(
+                    pdf_path
+                )
+
+                # ------------------------------------------------
+                # Save invoice to DB
+                # ------------------------------------------------
+
+                invoice_id = save_invoice_result(
+                    result
+                )
+
+                current_batch_ids.append(
+                    invoice_id
+                )
+
+                # ------------------------------------------------
+                # Show result
+                # ------------------------------------------------
+
+                if result.get("success"):
+
+                    status = (
+                        result
+                        .get("validation", {})
+                        .get("status", "FAIL")
+                    )
 
                     if status == "PASS":
+
                         st.success(
-                            f"✅ {uploaded_file.name} → PASS "
+                            f"✅ {uploaded_file.name} "
+                            f"→ PASS "
                             f"(ID: {invoice_id})"
                         )
 
                     elif status == "REVIEW":
+
                         st.warning(
-                            f"⚠️ {uploaded_file.name} → REVIEW "
+                            f"⚠️ {uploaded_file.name} "
+                            f"→ REVIEW "
                             f"(ID: {invoice_id})"
                         )
 
                     else:
+
                         st.error(
-                            f"❌ {uploaded_file.name} → FAIL "
+                            f"❌ {uploaded_file.name} "
+                            f"→ FAIL "
                             f"(ID: {invoice_id})"
                         )
 
                 else:
 
                     st.error(
-                        f"❌ Extraction failed: {uploaded_file.name}"
+                        f"❌ Extraction failed: "
+                        f"{uploaded_file.name}"
                     )
 
-            except Exception as e:
+            except Exception as error:
 
                 st.error(
-                    f"Error processing {uploaded_file.name}: {e}"
+                    f"❌ Error processing "
+                    f"{uploaded_file.name}: {error}"
                 )
 
             progress.progress(
-                (index + 1) / len(uploaded_files)
+                (index + 1)
+                / len(uploaded_files)
             )
 
-        st.success("Processing completed.")
+        # --------------------------------------------------------
+        # Store ALL processed invoice IDs
+        # --------------------------------------------------------
+
+        st.session_state.processed_batch_ids = (
+            current_batch_ids
+        )
+
+        # Automatically select first invoice
+        if current_batch_ids:
+
+            st.session_state.selected_invoice_id = (
+                current_batch_ids[0]
+            )
+
+            st.session_state.invoice_approved = False
+
+        st.success(
+            f"Processing completed. "
+            f"{len(current_batch_ids)} invoice(s) processed."
+        )
 
 
-# --------------------------------------------------
-# Verification screen
-# --------------------------------------------------
+# ============================================================
+# LOAD ALL INVOICES FROM DATABASE
+# ============================================================
 
-result = st.session_state.processed_invoice
-pdf_path = st.session_state.pdf_path
+all_invoices = get_all_invoices()
 
 
-if result and result.get("success"):
+# ============================================================
+# INVOICE SELECTOR
+# ============================================================
+
+if all_invoices:
 
     st.divider()
 
-    st.header("🔍 Invoice Verification")
+    st.header("📋 Processed Invoices")
 
-    invoice = result["invoice"]
-    validation = result["validation"]
+    # --------------------------------------------------------
+    # Create invoice lookup
+    # --------------------------------------------------------
 
-    # --------------------------------------------------
-    # Supplier + Layout information
-    # --------------------------------------------------
+    invoice_lookup = {
+        row["id"]: row
+        for row in all_invoices
+    }
 
-    info1, info2, info3, info4 = st.columns(4)
+    # --------------------------------------------------------
+    # Prefer current batch if available
+    # --------------------------------------------------------
+
+    if st.session_state.processed_batch_ids:
+
+        available_ids = [
+            invoice_id
+            for invoice_id
+            in st.session_state.processed_batch_ids
+            if invoice_id in invoice_lookup
+        ]
+
+    else:
+
+        available_ids = [
+            row["id"]
+            for row in all_invoices
+        ]
+
+    # --------------------------------------------------------
+    # Fallback
+    # --------------------------------------------------------
+
+    if not available_ids:
+
+        available_ids = [
+            row["id"]
+            for row in all_invoices
+        ]
+
+    # --------------------------------------------------------
+    # Ensure selected invoice is valid
+    # --------------------------------------------------------
+
+    if (
+        st.session_state.selected_invoice_id
+        not in available_ids
+    ):
+
+        st.session_state.selected_invoice_id = (
+            available_ids[0]
+        )
+
+    # --------------------------------------------------------
+    # Dropdown labels
+    # --------------------------------------------------------
+
+    def invoice_label(
+        invoice_id: int,
+    ) -> str:
+
+        row = invoice_lookup[invoice_id]
+
+        supplier = (
+            row.get("supplier")
+            or "Unknown Supplier"
+        )
+
+        return (
+            f"{row.get('file_name', 'Unknown PDF')}"
+            f" - {supplier}"
+            f" (ID: {invoice_id})"
+        )
+
+    # --------------------------------------------------------
+    # Dropdown
+    # --------------------------------------------------------
+
+    selected_id = st.selectbox(
+        "Select invoice to verify",
+        options=available_ids,
+        index=available_ids.index(
+            st.session_state.selected_invoice_id
+        ),
+        format_func=invoice_label,
+        key="invoice_selector",
+    )
+
+    # --------------------------------------------------------
+    # Detect invoice change
+    # --------------------------------------------------------
+
+    if (
+        selected_id
+        != st.session_state.selected_invoice_id
+    ):
+
+        st.session_state.selected_invoice_id = (
+            selected_id
+        )
+
+        st.session_state.invoice_approved = (
+            invoice_lookup[selected_id].get(
+                "approval_status"
+            )
+            == "APPROVED"
+        )
+
+        # Force rerun so all widgets show the new invoice
+        st.rerun()
+
+
+# ============================================================
+# GET CURRENT INVOICE
+# ============================================================
+
+current_invoice_row = None
+
+if (
+    st.session_state.selected_invoice_id
+    is not None
+):
+
+    for row in all_invoices:
+
+        if (
+            row["id"]
+            == st.session_state.selected_invoice_id
+        ):
+
+            current_invoice_row = row
+            break
+
+
+# ============================================================
+# VERIFICATION SCREEN
+# ============================================================
+
+if current_invoice_row:
+
+    row = current_invoice_row
+
+    # --------------------------------------------------------
+    # Load approved data if available.
+    # Otherwise load original extracted data.
+    # --------------------------------------------------------
+
+    approved_data = row.get(
+        "approved_invoice_data"
+    )
+
+    original_data = row.get(
+        "invoice_data"
+    )
+
+    if approved_data:
+
+        invoice = json.loads(
+            approved_data
+        )
+
+    elif original_data:
+
+        invoice = json.loads(
+            original_data
+        )
+
+    else:
+
+        invoice = {}
+
+    # --------------------------------------------------------
+    # Validation data
+    # --------------------------------------------------------
+
+    validation_data = row.get(
+        "validation_data"
+    )
+
+    if validation_data:
+
+        validation = json.loads(
+            validation_data
+        )
+
+    else:
+
+        validation = validate_invoice(
+            invoice
+        )
+
+    # --------------------------------------------------------
+    # PDF path
+    # --------------------------------------------------------
+
+    pdf_path = (
+        PROJECT_ROOT
+        / "data"
+        / "input"
+        / "invoices"
+        / row["file_name"]
+    )
+
+    # --------------------------------------------------------
+    # Approval state
+    # --------------------------------------------------------
+
+    is_approved = (
+        row.get("approval_status")
+        == "APPROVED"
+    )
+
+    st.session_state.invoice_approved = (
+        is_approved
+    )
+
+    # ========================================================
+    # VERIFICATION HEADER
+    # ========================================================
+
+    st.divider()
+
+    st.header(
+        "🔍 Invoice Verification"
+    )
+
+    st.caption(
+        f"Currently viewing: "
+        f"**{row.get('file_name')}**"
+    )
+
+    # --------------------------------------------------------
+    # Supplier + Layout
+    # --------------------------------------------------------
+
+    info1, info2, info3, info4 = (
+        st.columns(4)
+    )
 
     with info1:
+
         st.metric(
             "Supplier",
-            result.get("supplier") or "Unknown",
+            row.get("supplier")
+            or "Unknown",
         )
 
     with info2:
+
         st.metric(
             "Layout",
-            result.get("layout") or "Generic",
+            row.get("layout")
+            or "Generic",
         )
 
     with info3:
+
         st.metric(
             "Extraction",
-            result.get("extraction_method") or "Unknown",
+            row.get("extraction_method")
+            or "Unknown",
         )
 
     with info4:
+
         st.metric(
             "Status",
             "APPROVED"
-            if st.session_state.invoice_approved
-            else validation.get("status", "FAIL"),
+            if is_approved
+            else validation.get(
+                "status",
+                "FAIL",
+            ),
         )
 
-    # --------------------------------------------------
-    # PDF + Invoice details
-    # --------------------------------------------------
+    # ========================================================
+    # PDF + HEADER INFORMATION
+    # ========================================================
 
-    left, right = st.columns([1, 1])
+    left, right = st.columns(
+        [1, 1]
+    )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # PDF
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
     with left:
 
-        st.subheader("📄 Invoice")
+        st.subheader(
+            "📄 Invoice"
+        )
 
-        if pdf_path and pdf_path.exists():
+        if pdf_path.exists():
 
-            pdf_bytes = pdf_path.read_bytes()
+            pdf_bytes = (
+                pdf_path.read_bytes()
+            )
 
             st.download_button(
                 "Download Invoice PDF",
                 data=pdf_bytes,
                 file_name=pdf_path.name,
                 mime="application/pdf",
+                key=(
+                    f"download_pdf_"
+                    f"{row['id']}"
+                ),
             )
 
-            st.pdf(pdf_bytes)
+            st.pdf(
+                pdf_bytes
+            )
 
-    # --------------------------------------------------
-    # Invoice header
-    # --------------------------------------------------
+        else:
+
+            st.warning(
+                "Invoice PDF could not be found."
+            )
+
+    # --------------------------------------------------------
+    # Invoice Header
+    # --------------------------------------------------------
 
     with right:
 
-        st.subheader("Invoice Details")
+        st.subheader(
+            "Invoice Details"
+        )
 
         invoice_number = st.text_input(
             "Invoice Number",
-            value=invoice.get("invoice_number") or "",
+            value=(
+                invoice.get(
+                    "invoice_number"
+                )
+                or ""
+            ),
+            key=(
+                f"invoice_number_"
+                f"{row['id']}"
+            ),
         )
 
         invoice_date = st.text_input(
             "Invoice Date",
-            value=invoice.get("invoice_date") or "",
+            value=(
+                invoice.get(
+                    "invoice_date"
+                )
+                or ""
+            ),
+            key=(
+                f"invoice_date_"
+                f"{row['id']}"
+            ),
         )
 
         due_date = st.text_input(
             "Due Date",
-            value=invoice.get("due_date") or "",
+            value=(
+                invoice.get(
+                    "due_date"
+                )
+                or ""
+            ),
+            key=(
+                f"due_date_"
+                f"{row['id']}"
+            ),
         )
 
         purchase_order = st.text_input(
             "Purchase Order Number",
-            value=invoice.get("purchase_order_number") or "",
+            value=(
+                invoice.get(
+                    "purchase_order_number"
+                )
+                or ""
+            ),
+            key=(
+                f"purchase_order_"
+                f"{row['id']}"
+            ),
         )
 
-        st.subheader("Vendor Information")
+        st.subheader(
+            "Vendor Information"
+        )
 
         vendor_name = st.text_input(
             "Vendor Name",
-            value=invoice.get("vendor_name") or "",
+            value=(
+                invoice.get(
+                    "vendor_name"
+                )
+                or ""
+            ),
+            key=(
+                f"vendor_name_"
+                f"{row['id']}"
+            ),
         )
 
         vendor_address = st.text_input(
             "Vendor Address",
-            value=invoice.get("vendor_address") or "",
+            value=(
+                invoice.get(
+                    "vendor_address"
+                )
+                or ""
+            ),
+            key=(
+                f"vendor_address_"
+                f"{row['id']}"
+            ),
         )
 
         vendor_phone = st.text_input(
             "Vendor Phone",
-            value=invoice.get("vendor_phone") or "",
+            value=(
+                invoice.get(
+                    "vendor_phone"
+                )
+                or ""
+            ),
+            key=(
+                f"vendor_phone_"
+                f"{row['id']}"
+            ),
         )
 
         vendor_email = st.text_input(
             "Vendor Email",
-            value=invoice.get("vendor_email") or "",
+            value=(
+                invoice.get(
+                    "vendor_email"
+                )
+                or ""
+            ),
+            key=(
+                f"vendor_email_"
+                f"{row['id']}"
+            ),
         )
 
-        st.subheader("Customer Information")
+        st.subheader(
+            "Customer Information"
+        )
 
         customer_name = st.text_input(
             "Customer Name",
-            value=invoice.get("customer_name") or "",
+            value=(
+                invoice.get(
+                    "customer_name"
+                )
+                or ""
+            ),
+            key=(
+                f"customer_name_"
+                f"{row['id']}"
+            ),
         )
 
         customer_address = st.text_input(
             "Customer Address",
-            value=invoice.get("customer_address") or "",
+            value=(
+                invoice.get(
+                    "customer_address"
+                )
+                or ""
+            ),
+            key=(
+                f"customer_address_"
+                f"{row['id']}"
+            ),
         )
 
-    # --------------------------------------------------
-    # Item Master Verification
-    # --------------------------------------------------
+        ship_to_name = st.text_input(
+            "Ship To Name",
+            value=(
+                invoice.get(
+                    "ship_to_name"
+                )
+                or ""
+            ),
+            key=(
+                f"ship_to_name_"
+                f"{row['id']}"
+            ),
+        )
+
+        ship_to_address = st.text_input(
+            "Ship To Address",
+            value=(
+                invoice.get(
+                    "ship_to_address"
+                )
+                or ""
+            ),
+            key=(
+                f"ship_to_address_"
+                f"{row['id']}"
+            ),
+        )
+
+    # ========================================================
+    # ITEM MASTER VERIFICATION
+    # ========================================================
 
     st.divider()
 
-    st.header("📦 Item Master Verification")
-
-    st.caption(
-        "Verify or correct the extracted values before approval."
+    st.header(
+        "📦 Item Master Verification"
     )
 
-    line_items = invoice.get("line_items", [])
+    st.caption(
+        "Verify or correct the extracted values "
+        "before approval."
+    )
 
-    # Collected below so it is still available further down the
-    # page (Approval section) even when there are no line items.
+    line_items = invoice.get(
+        "line_items",
+        [],
+    )
+
     edited_items = []
 
     if not line_items:
 
-        st.warning("No line items were extracted.")
+        st.warning(
+            "No line items were extracted."
+        )
 
     else:
 
-        # --------------------------------------------------
-        # Which fields actually appear on THIS invoice
-        # --------------------------------------------------
-        #
-        # A field is shown only if at least one line item on
-        # this invoice actually has a value for it. Nothing
-        # fixed — a supplier that never gives a UOM simply
-        # never shows a UOM box; one that gives manufacturer
-        # part numbers shows that column for every item on
-        # that invoice (blank on the rows that lack it).
+        # ----------------------------------------------------
+        # Dynamic fields for this invoice
+        # ----------------------------------------------------
 
         active_fields = [
-            (field, label, kind)
-            for field, label, kind in ITEM_MASTER_FIELDS
-            if _any_line_item_has_value(line_items, field)
+            (
+                field,
+                label,
+                kind,
+            )
+            for field, label, kind
+            in ITEM_MASTER_FIELDS
+            if any_line_item_has_value(
+                line_items,
+                field,
+            )
         ]
 
-        for index, item in enumerate(line_items):
+        # ----------------------------------------------------
+        # Line items
+        # ----------------------------------------------------
 
-            st.markdown(f"#### Line Item {index + 1}")
+        for index, item in enumerate(
+            line_items
+        ):
+
+            st.markdown(
+                f"#### Line Item {index + 1}"
+            )
 
             edited_values = {}
 
-            # Render the active fields in rows of up to 4 columns.
-            for chunk_start in range(0, len(active_fields), 4):
+            # ------------------------------------------------
+            # Render fields
+            # ------------------------------------------------
 
-                chunk = active_fields[chunk_start:chunk_start + 4]
+            for chunk_start in range(
+                0,
+                len(active_fields),
+                4,
+            ):
 
-                columns = st.columns(len(chunk))
+                chunk = active_fields[
+                    chunk_start:
+                    chunk_start + 4
+                ]
 
-                for column, (field, label, kind) in zip(
-                    columns, chunk
+                columns = st.columns(
+                    len(chunk)
+                )
+
+                for column, (
+                    field,
+                    label,
+                    kind,
+                ) in zip(
+                    columns,
+                    chunk,
                 ):
 
                     with column:
 
+                        widget_key = (
+                            f"{field}_"
+                            f"{row['id']}_"
+                            f"{index}"
+                        )
+
                         if kind == "text":
 
-                            edited_values[field] = st.text_input(
+                            edited_values[
+                                field
+                            ] = st.text_input(
                                 label,
-                                value=item.get(field) or "",
-                                key=f"{field}_{index}",
+                                value=(
+                                    item.get(
+                                        field
+                                    )
+                                    or ""
+                                ),
+                                key=widget_key,
                             ) or None
 
                         elif kind == "quantity":
 
-                            edited_values[field] = st.number_input(
+                            edited_values[
+                                field
+                            ] = st.number_input(
                                 label,
                                 min_value=0.0,
-                                value=float(item.get(field) or 0),
-                                key=f"{field}_{index}",
+                                value=float(
+                                    item.get(
+                                        field
+                                    )
+                                    or 0
+                                ),
+                                format="%.4f",
+                                key=widget_key,
                             )
 
-                        else:  # money
+                        else:
 
-                            edited_values[field] = st.number_input(
+                            # ------------------------------------------------
+                            # IMPORTANT:
+                            # Do NOT force prices to 2 decimal places.
+                            #
+                            # Your invoices can contain:
+                            #
+                            # 8036.3178
+                            # 2499.0001
+                            # 1534.4765
+                            #
+                            # We preserve the extracted precision.
+                            # ------------------------------------------------
+
+                            edited_values[
+                                field
+                            ] = st.number_input(
                                 label,
                                 min_value=0.0,
-                                value=float(item.get(field) or 0),
-                                format="%.2f",
-                                key=f"{field}_{index}",
+                                value=float(
+                                    item.get(
+                                        field
+                                    )
+                                    or 0
+                                ),
+                                format="%.4f",
+                                key=widget_key,
                             )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # UOM information
-            # --------------------------------------------------
+            # ------------------------------------------------
 
-            uom_value = edited_values.get("uom")
+            uom_value = (
+                edited_values.get(
+                    "uom"
+                )
+            )
 
             if uom_value:
 
-                uom_upper = uom_value.strip().upper()
+                uom_upper = (
+                    uom_value
+                    .strip()
+                    .upper()
+                )
 
-                if uom_upper in ["E", "EA", "EACH"]:
+                if uom_upper in [
+                    "E",
+                    "EA",
+                    "EACH",
+                ]:
 
-                    st.info("E / EA = 1 each")
+                    st.info(
+                        "E / EA = 1 each"
+                    )
 
                 elif uom_upper == "C":
 
-                    st.info("C = per hundred")
+                    st.info(
+                        "C = per hundred"
+                    )
 
                 elif uom_upper == "M":
 
-                    st.info("M = per thousand")
+                    st.info(
+                        "M = per thousand"
+                    )
 
-            # --------------------------------------------------
+            # ------------------------------------------------
             # Store edited row
-            # --------------------------------------------------
-            #
-            # Fields not shown for this invoice stay None —
-            # nothing is invented to fill out a fixed shape.
+            # ------------------------------------------------
 
             edited_items.append(
                 {
-                    field: edited_values.get(field)
-                    for field, _label, _kind in ITEM_MASTER_FIELDS
+                    field: edited_values.get(
+                        field
+                    )
+                    for field, _label, _kind
+                    in ITEM_MASTER_FIELDS
                 }
             )
 
-        # --------------------------------------------------
-        # Show table preview
-        # --------------------------------------------------
+        # ====================================================
+        # PREVIEW
+        # ====================================================
 
         st.divider()
 
-        st.subheader("Item Master Preview")
+        st.subheader(
+            "Item Master Preview"
+        )
 
         preview_rows = []
 
@@ -473,8 +1066,14 @@ if result and result.get("success"):
 
             preview_rows.append(
                 {
-                    label: (item.get(field) or "")
-                    for field, label, _kind in active_fields
+                    label: (
+                        item.get(field)
+                        if item.get(field)
+                        is not None
+                        else ""
+                    )
+                    for field, label, _kind
+                    in active_fields
                 }
             )
 
@@ -484,19 +1083,27 @@ if result and result.get("success"):
             hide_index=True,
         )
 
-    # --------------------------------------------------
-    # Validation
-    # --------------------------------------------------
+    # ========================================================
+    # VALIDATION
+    # ========================================================
 
     st.divider()
 
-    st.subheader("🔎 Validation")
+    st.subheader(
+        "🔎 Validation"
+    )
 
-    if validation["status"] == "PASS":
+    if validation.get(
+        "status"
+    ) == "PASS":
 
-        st.success("✅ PASS — Ready for approval")
+        st.success(
+            "✅ PASS — Ready for approval"
+        )
 
-    elif validation["status"] == "REVIEW":
+    elif validation.get(
+        "status"
+    ) == "REVIEW":
 
         st.warning(
             "⚠️ REVIEW — Human verification required"
@@ -508,111 +1115,223 @@ if result and result.get("success"):
             "❌ FAIL — Extraction or validation issue"
         )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # Warnings
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
-    if validation.get("warnings"):
+    if validation.get(
+        "warnings"
+    ):
 
-        st.write("**Warnings:**")
+        st.write(
+            "**Warnings:**"
+        )
 
-        for warning in validation["warnings"]:
+        for warning in validation[
+            "warnings"
+        ]:
 
-            st.warning(warning)
+            st.warning(
+                warning
+            )
 
-    # --------------------------------------------------
+    # --------------------------------------------------------
     # Errors
-    # --------------------------------------------------
+    # --------------------------------------------------------
 
-    if validation.get("errors"):
+    if validation.get(
+        "errors"
+    ):
 
-        st.write("**Errors:**")
+        st.write(
+            "**Errors:**"
+        )
 
-        for error in validation["errors"]:
+        for error in validation[
+            "errors"
+        ]:
 
-            st.error(error)
+            st.error(
+                error
+            )
 
-    # --------------------------------------------------
-    # Approval
-    # --------------------------------------------------
+    # ========================================================
+    # APPROVAL
+    # ========================================================
 
     st.divider()
 
-    st.subheader("✅ Approval")
+    st.subheader(
+        "✅ Approval"
+    )
 
-    if st.session_state.invoice_approved:
+    if is_approved:
 
         st.info(
-            "This invoice has already been approved. The "
-            "verified values shown above have been saved."
+            "This invoice has already been approved. "
+            "The verified values shown above are saved "
+            "in the database."
         )
+
+    # --------------------------------------------------------
+    # Approve button
+    # --------------------------------------------------------
 
     if st.button(
         "✅ Approve Invoice",
         type="primary",
+        key=(
+            f"approve_invoice_"
+            f"{row['id']}"
+        ),
     ):
 
-        # Build the invoice as the reviewer has edited it, so
-        # header corrections and line-item corrections are both
-        # captured before saving.
+        # ----------------------------------------------------
+        # Build verified invoice
+        # ----------------------------------------------------
 
         edited_invoice = {
-            "vendor_name": vendor_name or None,
-            "vendor_address": vendor_address or None,
-            "vendor_phone": vendor_phone or None,
-            "vendor_email": vendor_email or None,
-            "customer_name": customer_name or None,
-            "customer_address": customer_address or None,
-            "invoice_number": invoice_number or None,
-            "invoice_date": invoice_date or None,
-            "due_date": due_date or None,
-            "purchase_order_number": purchase_order or None,
-            "line_items": edited_items,
-            "subtotal_usd": invoice.get("subtotal_usd"),
-            "tax_usd": invoice.get("tax_usd"),
-            "total_usd": invoice.get("total_usd"),
+
+            "vendor_name":
+                vendor_name or None,
+
+            "vendor_address":
+                vendor_address or None,
+
+            "vendor_phone":
+                vendor_phone or None,
+
+            "vendor_email":
+                vendor_email or None,
+
+            "customer_name":
+                customer_name or None,
+
+            "customer_address":
+                customer_address or None,
+
+            "ship_to_name":
+                ship_to_name or None,
+
+            "ship_to_address":
+                ship_to_address or None,
+
+            "invoice_number":
+                invoice_number or None,
+
+            "invoice_date":
+                invoice_date or None,
+
+            "due_date":
+                due_date or None,
+
+            "purchase_order_number":
+                purchase_order or None,
+
+            "line_items":
+                edited_items,
+
+            "subtotal_usd":
+                invoice.get(
+                    "subtotal_usd"
+                ),
+
+            "tax_usd":
+                invoice.get(
+                    "tax_usd"
+                ),
+
+            "total_usd":
+                invoice.get(
+                    "total_usd"
+                ),
         }
 
-        approval_validation = validate_invoice(edited_invoice)
+        # ----------------------------------------------------
+        # Validate edited invoice
+        # ----------------------------------------------------
 
-        if approval_validation["status"] == "FAIL":
+        approval_validation = (
+            validate_invoice(
+                edited_invoice
+            )
+        )
+
+        if (
+            approval_validation["status"]
+            == "FAIL"
+        ):
 
             st.error(
-                "❌ Cannot approve — please resolve the "
-                "following before approving:"
+                "❌ Cannot approve — "
+                "please resolve the following "
+                "before approving:"
             )
 
-            for error in approval_validation["errors"]:
-                st.error(error)
+            for error in (
+                approval_validation[
+                    "errors"
+                ]
+            ):
+
+                st.error(
+                    error
+                )
 
         else:
 
+            # ------------------------------------------------
+            # Save approved invoice
+            # ------------------------------------------------
+
             approve_invoice(
-                st.session_state.invoice_id,
+                row["id"],
                 edited_invoice,
             )
 
-            st.session_state.invoice_approved = True
-
-            st.success(
-                "Invoice verified successfully and saved."
+            st.session_state.invoice_approved = (
+                True
             )
 
-            if approval_validation["warnings"]:
+            st.success(
+                "✅ Invoice verified successfully "
+                "and saved."
+            )
 
-                st.write("**Saved with outstanding warnings:**")
+            if approval_validation.get(
+                "warnings"
+            ):
 
-                for warning in approval_validation["warnings"]:
-                    st.warning(warning)
+                st.write(
+                    "**Saved with outstanding warnings:**"
+                )
+
+                for warning in (
+                    approval_validation[
+                        "warnings"
+                    ]
+                ):
+
+                    st.warning(
+                        warning
+                    )
+
+            # ------------------------------------------------
+            # Refresh data
+            # ------------------------------------------------
+
+            st.rerun()
 
 
-# --------------------------------------------------
-# Export
-# --------------------------------------------------
+# ============================================================
+# EXPORT APPROVED ITEM MASTER
+# ============================================================
 
 st.divider()
 
-st.header("📤 Export Approved Item Master")
+st.header(
+    "📤 Export Approved Item Master"
+)
 
 st.caption(
     "Combine every approved invoice — across all suppliers, "
@@ -621,19 +1340,35 @@ st.caption(
     "Customer details alongside that line item."
 )
 
+
+# ============================================================
+# GET ALL APPROVED EXPORT ROWS
+# ============================================================
+
 export_rows = get_export_rows()
 
+
 st.write(
-    f"Approved line items available for export: "
+    "Approved line items available for export: "
     f"**{len(export_rows)}**"
 )
 
+
 if export_rows:
 
-    csv_bytes = build_item_master_csv(export_rows)
-    workbook_bytes = build_item_master_workbook(export_rows)
+    csv_bytes = build_item_master_csv(
+        export_rows
+    )
 
-    export_col1, export_col2 = st.columns(2)
+    workbook_bytes = (
+        build_item_master_workbook(
+            export_rows
+        )
+    )
+
+    export_col1, export_col2 = (
+        st.columns(2)
+    )
 
     with export_col1:
 
@@ -659,23 +1394,26 @@ if export_rows:
 else:
 
     st.info(
-        "No approved invoices yet. Approve at least one "
-        "invoice above to enable export."
+        "No approved invoices yet. "
+        "Approve at least one invoice above "
+        "to enable export."
     )
 
 
-# --------------------------------------------------
-# Pipeline
-# --------------------------------------------------
+# ============================================================
+# PIPELINE
+# ============================================================
 
 st.divider()
 
-st.subheader("Pipeline")
+st.subheader(
+    "Pipeline"
+)
 
 st.write(
     """
-    PDF → Text/OCR → Supplier Detection → Layout Detection
-    → Generic Parser → Groq → Normalization
-    → Validation → Human Verification → Item Master CSV
-    """
+PDF → Text/OCR → Supplier Detection → Layout Detection
+→ Generic Parser → Groq → Normalization
+→ Validation → Human Verification → Item Master CSV
+"""
 )

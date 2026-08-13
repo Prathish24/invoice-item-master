@@ -1,68 +1,136 @@
 from pathlib import Path
 from typing import Any
 
-from src.extraction.extraction_service import extract_invoice_text
-from src.supplier.supplier_detector import detect_supplier
-from src.supplier.layout_detector import detect_layout
-from src.parsers.generic_parser import GenericInvoiceParser
+from src.extraction.extraction_service import (
+    extract_invoice_text,
+)
+from src.supplier.supplier_detector import (
+    detect_supplier,
+)
+from src.supplier.layout_detector import (
+    detect_layout,
+)
+from src.parsers.generic_parser import (
+    GenericInvoiceParser,
+)
 
 from src.normalization.uom_normalizer import (
     normalize_uom,
     get_uom_multiplier,
 )
-from src.normalization.description_normalizer import normalize_description
-from src.normalization.part_number_normalizer import normalize_part_number
-from src.validation.invoice_validator import validate_invoice
+from src.normalization.description_normalizer import (
+    normalize_description,
+)
+from src.normalization.part_number_normalizer import (
+    normalize_part_number,
+)
+from src.validation.invoice_validator import (
+    validate_invoice,
+)
 
 
-def normalize_invoice(invoice: dict[str, Any]) -> dict[str, Any]:
-    """Normalize extracted invoice data."""
+# ============================================================
+# NORMALIZATION
+# ============================================================
+
+def normalize_invoice(
+    invoice: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Normalize extracted invoice data.
+    """
 
     normalized = invoice.copy()
+
     normalized_line_items = []
 
-    for item in invoice.get("line_items", []):
+    for item in invoice.get(
+        "line_items",
+        [],
+    ):
 
         normalized_item = item.copy()
 
-        normalized_item["description"] = normalize_description(
-            item.get("description")
-        )
+        # ----------------------------------------------------
+        # Description
+        # ----------------------------------------------------
 
-        normalized_item["manufacturer_part_number"] = (
-            normalize_part_number(
-                item.get("manufacturer_part_number")
+        normalized_item["description"] = (
+            normalize_description(
+                item.get("description")
             )
         )
 
-        normalized_item["vendor_part_number"] = (
-            normalize_part_number(
-                item.get("vendor_part_number")
+        # ----------------------------------------------------
+        # Manufacturer Part Number
+        # ----------------------------------------------------
+
+        normalized_item[
+            "manufacturer_part_number"
+        ] = normalize_part_number(
+            item.get(
+                "manufacturer_part_number"
             )
         )
 
-        normalized_item["uom"] = normalize_uom(
+        # ----------------------------------------------------
+        # Vendor Part Number
+        # ----------------------------------------------------
+
+        normalized_item[
+            "vendor_part_number"
+        ] = normalize_part_number(
+            item.get(
+                "vendor_part_number"
+            )
+        )
+
+        # ----------------------------------------------------
+        # UOM
+        # ----------------------------------------------------
+
+        normalized_item["uom"] = (
+            normalize_uom(
+                item.get("uom")
+            )
+        )
+
+        # ----------------------------------------------------
+        # UOM multiplier
+        # ----------------------------------------------------
+
+        normalized_item[
+            "uom_multiplier"
+        ] = get_uom_multiplier(
             item.get("uom")
         )
 
-        normalized_item["uom_multiplier"] = get_uom_multiplier(
-            item.get("uom")
+        normalized_line_items.append(
+            normalized_item
         )
 
-        normalized_line_items.append(normalized_item)
-
-    normalized["line_items"] = normalized_line_items
+    normalized["line_items"] = (
+        normalized_line_items
+    )
 
     return normalized
 
 
-def process_invoice(pdf_path: str | Path) -> dict[str, Any]:
+# ============================================================
+# PROCESS INVOICE
+# ============================================================
+
+def process_invoice(
+    pdf_path: str | Path,
+) -> dict[str, Any]:
     """
     Complete invoice processing pipeline.
 
     PDF
       ↓
     Text / OCR
+      ↓
+    Layout-aware extraction
       ↓
     Supplier Detection
       ↓
@@ -77,83 +145,145 @@ def process_invoice(pdf_path: str | Path) -> dict[str, Any]:
 
     pdf_path = Path(pdf_path)
 
-    # --------------------------------------------------
-    # 1. PDF extraction
-    # --------------------------------------------------
+    # ========================================================
+    # 1. PDF EXTRACTION
+    # ========================================================
 
-    extraction_result = extract_invoice_text(pdf_path)
+    extraction_result = extract_invoice_text(
+        pdf_path
+    )
 
     if not extraction_result["success"]:
+
         return {
             "file_name": pdf_path.name,
+
             "success": False,
+
             "extraction": extraction_result,
+
             "supplier": None,
+
             "layout": None,
+
             "invoice": None,
+
             "validation": {
                 "status": "FAIL",
-                "errors": ["Could not extract text from PDF"],
+                "errors": [
+                    "Could not extract text from PDF"
+                ],
                 "warnings": [],
                 "is_valid": False,
             },
         }
 
-    invoice_text = extraction_result["text"]
+    # ========================================================
+    # 2. CHOOSE BEST TEXT REPRESENTATION
+    # ========================================================
 
-    # --------------------------------------------------
-    # 2. Supplier detection
-    # --------------------------------------------------
+    # For normal PDFs, extraction_service now provides
+    # layout-aware text.
+    #
+    # For OCR PDFs, extraction_text will contain OCR text.
 
-    supplier = detect_supplier(invoice_text)
+    invoice_text = extraction_result.get(
+        "extraction_text"
+    )
 
-    # --------------------------------------------------
-    # 3. Layout detection
-    # --------------------------------------------------
+    # Safety fallback for older extraction results
+    if not invoice_text:
+        invoice_text = extraction_result.get(
+            "text",
+            ""
+        )
+
+    if not invoice_text.strip():
+
+        return {
+            "file_name": pdf_path.name,
+
+            "success": False,
+
+            "extraction": extraction_result,
+
+            "supplier": None,
+
+            "layout": None,
+
+            "invoice": None,
+
+            "validation": {
+                "status": "FAIL",
+                "errors": [
+                    "Extracted invoice text is empty"
+                ],
+                "warnings": [],
+                "is_valid": False,
+            },
+        }
+
+    # ========================================================
+    # 3. SUPPLIER DETECTION
+    # ========================================================
+
+    supplier = detect_supplier(
+        invoice_text
+    )
+
+    # ========================================================
+    # 4. LAYOUT DETECTION
+    # ========================================================
 
     layout = detect_layout(
         invoice_text,
         supplier,
     )
 
-    # --------------------------------------------------
-    # 4. Parser selection
-    # --------------------------------------------------
+    # ========================================================
+    # 5. PARSER SELECTION
+    # ========================================================
 
-    # For now we use GenericParser for ALL suppliers.
-    # Later, specialized parsers can be added only when
-    # a recurring supplier/layout requires one.
+    # Generic parser is currently used for all suppliers.
+    #
+    # Later, supplier-specific parsers can be introduced
+    # only when a recurring supplier/layout requires one.
 
     parser = GenericInvoiceParser()
 
-    invoice_data = parser.parse(invoice_text)
+    invoice_data = parser.parse(
+        invoice_text
+    )
 
-    # --------------------------------------------------
-    # 5. Normalization
-    # --------------------------------------------------
+    # ========================================================
+    # 6. NORMALIZATION
+    # ========================================================
 
     normalized_invoice = normalize_invoice(
         invoice_data
     )
 
-    # --------------------------------------------------
-    # 6. Validation
-    # --------------------------------------------------
+    # ========================================================
+    # 7. VALIDATION
+    # ========================================================
 
     validation_result = validate_invoice(
         normalized_invoice
     )
 
-    # --------------------------------------------------
-    # 7. Final result
-    # --------------------------------------------------
+    # ========================================================
+    # 8. FINAL RESULT
+    # ========================================================
 
     return {
         "file_name": pdf_path.name,
+
         "success": True,
 
         "extraction_method": (
-            extraction_result["extraction_method"]
+            extraction_result[
+                "extraction_method"
+            ]
         ),
 
         "supplier": supplier,
