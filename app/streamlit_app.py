@@ -225,7 +225,28 @@ if uploaded_files:
 
                 # ------------------------------------------------
                 # Save invoice to DB
+                #
+                # Keep the existing database schema unchanged.
+                # Store the AI verification result inside the
+                # existing validation_data JSON.
                 # ------------------------------------------------
+
+                result.setdefault(
+                    "validation",
+                    {}
+                )
+
+                result["validation"]["verification"] = result.get(
+                    "verification",
+                    {
+                        "status": "REVIEW",
+                        "summary": (
+                            "AI verification result was not returned."
+                        ),
+                        "issues": [],
+                        "verified_fields": [],
+                    },
+                )
 
                 invoice_id = save_invoice_result(
                     result
@@ -997,6 +1018,29 @@ if current_invoice_row:
                             )
 
             # ------------------------------------------------
+            # Dynamic additional information
+            # ------------------------------------------------
+
+            additional_info = item.get(
+                "additional_info",
+                {}
+            )
+
+            if isinstance(
+                additional_info,
+                dict,
+            ) and additional_info:
+
+                with st.expander(
+                    "Additional Information",
+                    expanded=False,
+                ):
+
+                    st.json(
+                        additional_info
+                    )
+
+            # ------------------------------------------------
             # UOM information
             # ------------------------------------------------
 
@@ -1038,16 +1082,41 @@ if current_invoice_row:
 
             # ------------------------------------------------
             # Store edited row
+            #
+            # IMPORTANT:
+            # Preserve dynamic additional_info from the original
+            # extracted line item so it is not lost during approval.
             # ------------------------------------------------
 
+            edited_item = {
+                field: edited_values.get(
+                    field
+                )
+                for field, _label, _kind
+                in ITEM_MASTER_FIELDS
+            }
+
+            original_additional_info = item.get(
+                "additional_info",
+                {}
+            )
+
+            if isinstance(
+                original_additional_info,
+                dict,
+            ):
+                edited_item[
+                    "additional_info"
+                ] = dict(
+                    original_additional_info
+                )
+            else:
+                edited_item[
+                    "additional_info"
+                ] = {}
+
             edited_items.append(
-                {
-                    field: edited_values.get(
-                        field
-                    )
-                    for field, _label, _kind
-                    in ITEM_MASTER_FIELDS
-                }
+                edited_item
             )
 
         # ====================================================
@@ -1082,6 +1151,133 @@ if current_invoice_row:
             use_container_width=True,
             hide_index=True,
         )
+
+    # ========================================================
+    # AI VERIFICATION
+    # ========================================================
+
+    st.divider()
+
+    st.subheader(
+        "🤖 AI Verification"
+    )
+
+    # Verification is stored inside validation_data when the
+    # invoice is saved, so it survives Streamlit reruns.
+
+    verification = validation.get(
+        "verification"
+    )
+
+    if not isinstance(verification, dict):
+        verification = {
+            "status": "REVIEW",
+            "summary": (
+                "AI verification was not run "
+                "for this stored invoice."
+            ),
+            "issues": [],
+            "verified_fields": [],
+        }
+
+    verification_status = verification.get(
+        "status",
+        "REVIEW",
+    )
+
+    verification_summary = verification.get(
+        "summary",
+        "",
+    )
+
+    verification_issues = verification.get(
+        "issues",
+        [],
+    )
+
+    verification_fields = verification.get(
+        "verified_fields",
+        [],
+    )
+
+    if verification_status == "PASS":
+        st.success(
+            "✅ AI Verification PASS — "
+            "No discrepancies found."
+        )
+    else:
+        st.warning(
+            "⚠️ AI Verification REVIEW — "
+            "Human verification is required."
+        )
+
+    if verification_summary:
+        st.write(
+            f"**Summary:** {verification_summary}"
+        )
+
+    if verification_issues:
+        st.write("**Detected Issues:**")
+
+        for issue_index, issue in enumerate(
+            verification_issues,
+            start=1,
+        ):
+            if not isinstance(issue, dict):
+                continue
+
+            field = issue.get(
+                "field",
+                "Unknown field",
+            )
+
+            line_number = issue.get(
+                "line_number"
+            )
+
+            extracted_value = issue.get(
+                "extracted_value"
+            )
+
+            invoice_value = issue.get(
+                "invoice_value"
+            )
+
+            reason = issue.get(
+                "reason",
+                "",
+            )
+
+            if line_number is not None:
+                st.error(
+                    f"**Issue {issue_index} — "
+                    f"Line {line_number} — {field}**\n\n"
+                    f"Extracted: `{extracted_value}`  \n"
+                    f"Invoice: `{invoice_value}`  \n"
+                    f"Reason: {reason}"
+                )
+            else:
+                st.error(
+                    f"**Issue {issue_index} — "
+                    f"{field}**\n\n"
+                    f"Extracted: `{extracted_value}`  \n"
+                    f"Invoice: `{invoice_value}`  \n"
+                    f"Reason: {reason}"
+                )
+
+    elif verification_status == "PASS":
+        st.caption(
+            "The verification agent found no clearly "
+            "supported discrepancies."
+        )
+
+    if verification_fields:
+        with st.expander(
+            "Fields checked by AI verifier"
+        ):
+            st.write(
+                verification_fields
+            )
 
     # ========================================================
     # VALIDATION
@@ -1227,6 +1423,96 @@ if current_invoice_row:
 
             "purchase_order_number":
                 purchase_order or None,
+
+            # ------------------------------------------------
+            # Preserve optional invoice-level fields.
+            # These were previously dropped during approval.
+            # ------------------------------------------------
+
+            "sales_order_number":
+                invoice.get(
+                    "sales_order_number"
+                ),
+
+            "quote_number":
+                invoice.get(
+                    "quote_number"
+                ),
+
+            "order_date":
+                invoice.get(
+                    "order_date"
+                ),
+
+            "ship_date":
+                invoice.get(
+                    "ship_date"
+                ),
+
+            "delivery_date":
+                invoice.get(
+                    "delivery_date"
+                ),
+
+            "packing_slip_number":
+                invoice.get(
+                    "packing_slip_number"
+                ),
+
+            "customer_account_number":
+                invoice.get(
+                    "customer_account_number"
+                ),
+
+            "vendor_account_number":
+                invoice.get(
+                    "vendor_account_number"
+                ),
+
+            "job_number":
+                invoice.get(
+                    "job_number"
+                ),
+
+            "project_number":
+                invoice.get(
+                    "project_number"
+                ),
+
+            "terms":
+                invoice.get(
+                    "terms"
+                ),
+
+            "currency":
+                invoice.get(
+                    "currency"
+                ),
+
+            "freight_usd":
+                invoice.get(
+                    "freight_usd"
+                ),
+
+            "discount_usd":
+                invoice.get(
+                    "discount_usd"
+                ),
+
+            "tracking_number":
+                invoice.get(
+                    "tracking_number"
+                ),
+
+            "salesperson":
+                invoice.get(
+                    "salesperson"
+                ),
+
+            "tax_id":
+                invoice.get(
+                    "tax_id"
+                ),
 
             "line_items":
                 edited_items,
@@ -1414,6 +1700,7 @@ st.write(
     """
 PDF → Text/OCR → Supplier Detection → Layout Detection
 → Generic Parser → Groq → Normalization
-→ Validation → Human Verification → Item Master CSV
+→ AI Verification Agent → Validation
+→ Human Verification → Item Master CSV
 """
 )

@@ -615,17 +615,78 @@ def get_export_rows(
 
         if not line_items:
 
+            empty_item_row = dict(
+                header
+            )
+
+            invoice_additional_info = invoice.get(
+                "additional_info",
+                {}
+            )
+
+            if not isinstance(
+                invoice_additional_info,
+                dict,
+            ):
+                invoice_additional_info = {}
+
+            empty_item_row[
+                "invoice_additional_info"
+            ] = {
+                str(key).strip(): value
+                for key, value
+                in invoice_additional_info.items()
+                if key is not None
+                and str(key).strip()
+                and value not in (None, "")
+            }
+
             export_rows.append(
-                dict(header)
+                empty_item_row
             )
 
             continue
+
+        # ----------------------------------------------------
+        # Invoice-level dynamic additional information
+        #
+        # Different invoices can contain completely different
+        # extra header fields. Preserve those dynamically instead
+        # of adding fixed database columns for every possibility.
+        # ----------------------------------------------------
+
+        invoice_additional_info = invoice.get(
+            "additional_info",
+            {}
+        )
+
+        if not isinstance(
+            invoice_additional_info,
+            dict,
+        ):
+            invoice_additional_info = {}
+
+        # Keep only real values.
+        invoice_additional_info = {
+            str(key).strip(): value
+            for key, value
+            in invoice_additional_info.items()
+            if key is not None
+            and str(key).strip()
+            and value not in (None, "")
+        }
 
         for item in line_items:
 
             export_row = dict(
                 header
             )
+
+            # Preserve invoice-level dynamic information
+            # separately from line-item dynamic information.
+            export_row[
+                "invoice_additional_info"
+            ] = invoice_additional_info
 
             export_row.update(
                 item

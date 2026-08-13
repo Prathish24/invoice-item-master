@@ -16,6 +16,8 @@ client = Groq(
 
 MODEL_NAME = "llama-3.3-70b-versatile"
 
+VISION_MODEL = "qwen/qwen3.6-27b"
+
 
 # ============================================================
 # SYSTEM PROMPT
@@ -650,6 +652,179 @@ quantity_shipped = null
 
 
 ============================================================
+DYNAMIC ADDITIONAL LINE-ITEM INFORMATION
+============================================================
+
+Different suppliers may have additional columns or fields in
+their item tables that are not part of the standard Item Master.
+
+Examples include:
+
+- Qty Ordered
+- Back Ordered
+- Allocated
+- Available
+- Sales Rep
+- Warehouse
+- Bin
+- Serial Number
+- Lot Number
+- Manufacturer
+- Country of Origin
+- Lead Time
+- Customer Item
+- Requested Date
+- Promised Date
+- any other clearly labeled line-item information
+
+DO NOT force these fields into the standard fields.
+
+Instead, store them inside:
+
+additional_info
+
+Example:
+
+"additional_info": {{
+    "Qty Ordered": 40,
+    "Back Ordered": 10
+}}
+
+Another invoice might contain:
+
+"additional_info": {{
+    "Serial Number": "ABC123",
+    "Warehouse": "WH-02"
+}}
+
+IMPORTANT:
+
+1. Only include additional information that is actually present
+   on the CURRENT invoice.
+
+2. Only include information that can clearly be associated with
+   that specific line item.
+
+3. Preserve the original label as the key whenever practical.
+
+4. Preserve the source value without unnecessary rewriting.
+
+5. Do NOT copy information from another invoice.
+
+6. Do NOT invent additional fields.
+
+7. Do NOT move standard fields into additional_info.
+
+8. Do NOT put Qty Ordered into quantity_shipped.
+
+9. Do NOT put Back Ordered into quantity_shipped.
+
+10. quantity_shipped must continue to represent the actual
+    shipped/fulfilled quantity.
+
+11. If the invoice has no additional line-item information,
+    additional_info must be an empty object:
+
+    {}
+
+12. Do not keep line-item additional_info entries whose value is
+    null, empty, or blank.
+
+13. If a field is invoice-level rather than line-item-level,
+    keep it in the appropriate invoice-level field instead of
+    repeating it inside every line item.
+
+
+============================================================
+DYNAMIC INVOICE-LEVEL ADDITIONAL INFORMATION
+============================================================
+
+Invoices may contain useful labeled information that does not
+fit one of the standard invoice-level fields.
+
+Examples include:
+
+- PO#
+- Order Number
+- Customer ID
+- Customer Number
+- Account Number
+- Sales Rep
+- Salesperson
+- Taker
+- Shipping Method
+- Requested Date
+
+CRITICAL LABEL/VALUE ASSOCIATION RULE:
+
+When the invoice header contains several labeled values near
+each other, associate each value ONLY with the label it belongs to.
+
+Example:
+
+Invoice no: 4614230    Taker: PAUL SICKLER
+Order Number: 4614230  Order Date: 08/11/2025
+Customer ID: 124431    PO#: MODNY14-455006
+
+Correct mapping:
+
+invoice_number = "4614230"
+salesperson = "PAUL SICKLER"
+sales_order_number = "4614230"
+order_date = "08/11/2025"
+customer_account_number = "124431"
+purchase_order_number = "MODNY14-455006"
+
+NEVER put a nearby order number, invoice number, PO number,
+customer ID, or date into Taker, Sales Rep, or Salesperson.
+- Delivery Instructions
+- Payment Instructions
+- Approval Information
+- any other clearly labeled invoice-level information
+
+FIRST try to map the value into the correct standard field.
+
+For example:
+
+PO# MODNY14-455006
+
+normally belongs in:
+
+purchase_order_number = "MODNY14-455006"
+
+If a clearly labeled value cannot be confidently mapped to a
+standard field, DO NOT discard it.
+
+Preserve it in the TOP-LEVEL additional_info object.
+
+Example:
+
+"additional_info": {{
+    "PO#": "MODNY14-455006",
+    "Sales Rep": "PAUL SICKLER",
+    "Order Number": "4614230",
+    "Customer ID": "124431"
+}}
+
+Rules:
+
+1. Only include information actually present on the CURRENT invoice.
+2. Preserve the original label as the key whenever practical.
+3. Preserve the source value without unnecessary rewriting.
+4. Do not use additional_info to replace a standard field when
+   the standard field can be confidently populated.
+5. Do not duplicate a standard field in additional_info when
+   the same value is already confidently stored in that standard
+   field. For example, if sales_order_number contains 4614230,
+   do not also return "Order Number": "4614230" in additional_info.
+   Only keep the value in additional_info when it represents
+   separate information or cannot be confidently mapped.
+6. Do not invent or infer additional fields.
+7. Do not copy values from previous invoices or examples.
+8. If no extra invoice-level information exists:
+   additional_info = {{}}
+
+============================================================
 UNIT PRICE
 ============================================================
 
@@ -828,6 +1003,10 @@ EXTRACTION_SCHEMA = {
     "salesperson": None,
     "tax_id": None,
 
+    # Dynamic invoice-level information not represented by one
+    # of the standard invoice fields.
+    "additional_info": {},
+
     "line_items": [
         {
             "manufacturer_part_number": None,
@@ -838,6 +1017,10 @@ EXTRACTION_SCHEMA = {
             "unit_price_usd": None,
             "extended_price_usd": None,
             "uom_multiplier": None,
+
+            # Dynamic line-item information that does not belong
+            # to the standard Item Master fields.
+            "additional_info": {},
         }
     ],
 
@@ -896,6 +1079,18 @@ INVOICE_JSON_SCHEMA = {
         "salesperson": {"type": ["string", "null"]},
         "tax_id": {"type": ["string", "null"]},
 
+        "additional_info": {
+            "type": "object",
+            "additionalProperties": {
+                "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                ]
+            }
+        },
+
         "line_items": {
             "type": "array",
             "items": {
@@ -927,6 +1122,18 @@ INVOICE_JSON_SCHEMA = {
                     "uom_multiplier": {
                         "type": ["number", "null"]
                     },
+
+                    "additional_info": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": [
+                                "string",
+                                "number",
+                                "boolean",
+                                "null"
+                            ]
+                        }
+                    },
                 },
                 "required": [
                     "manufacturer_part_number",
@@ -937,6 +1144,7 @@ INVOICE_JSON_SCHEMA = {
                     "unit_price_usd",
                     "extended_price_usd",
                     "uom_multiplier",
+                    "additional_info",
                 ],
                 "additionalProperties": False,
             },
@@ -977,6 +1185,7 @@ INVOICE_JSON_SCHEMA = {
         "tracking_number",
         "salesperson",
         "tax_id",
+        "additional_info",
         "line_items",
         "subtotal_usd",
         "tax_usd",
@@ -1129,6 +1338,128 @@ def preserve_phone(
 
 
 # ============================================================
+# REMOVE DUPLICATES FROM DYNAMIC INVOICE INFORMATION
+# ============================================================
+
+def _normalize_dynamic_key(value: Any) -> str:
+    """
+    Normalize a dynamic field label only for duplicate detection.
+
+    This does NOT change the value written to additional_info.
+    """
+    if value is None:
+        return ""
+
+    return re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        str(value).strip().lower(),
+    ).strip()
+
+
+def _is_same_value(
+    left: Any,
+    right: Any,
+) -> bool:
+    """
+    Compare values conservatively for duplicate detection.
+
+    Numeric values are compared numerically when possible.
+    Text values are compared after trimming whitespace.
+    """
+
+    if left is None or right is None:
+        return False
+
+    try:
+        return float(left) == float(right)
+    except (TypeError, ValueError):
+        return (
+            str(left).strip().lower()
+            == str(right).strip().lower()
+        )
+
+
+def _remove_standard_field_duplicates(
+    additional_info: dict[str, Any],
+    standard_fields: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Remove dynamic additional-info entries when they simply
+    duplicate a confidently populated standard field.
+
+    Example:
+
+        sales_order_number = "4614230"
+
+        additional_info = {
+            "Order Number": "4614230"
+        }
+
+    becomes:
+
+        additional_info = {{}}
+    """
+
+    aliases = {
+        "invoice number": "invoice_number",
+        "invoice no": "invoice_number",
+        "invoice #": "invoice_number",
+        "invoice date": "invoice_date",
+
+        "po": "purchase_order_number",
+        "po number": "purchase_order_number",
+        "po no": "purchase_order_number",
+        "po #": "purchase_order_number",
+        "po#": "purchase_order_number",
+        "purchase order": "purchase_order_number",
+        "purchase order number": "purchase_order_number",
+
+        "order number": "sales_order_number",
+        "order no": "sales_order_number",
+        "order #": "sales_order_number",
+        "order": "sales_order_number",
+        "sales order": "sales_order_number",
+        "sales order number": "sales_order_number",
+        "sales order no": "sales_order_number",
+        "sales order #": "sales_order_number",
+
+        "sales rep": "salesperson",
+        "salesperson": "salesperson",
+        "sales person": "salesperson",
+    }
+
+    cleaned: dict[str, Any] = {}
+
+    for key, value in additional_info.items():
+
+        normalized_key = _normalize_dynamic_key(
+            key
+        )
+
+        standard_field = aliases.get(
+            normalized_key
+        )
+
+        if (
+            standard_field
+            and standard_fields.get(standard_field)
+            not in (None, "")
+            and _is_same_value(
+                standard_fields.get(standard_field),
+                value,
+            )
+        ):
+            # Same information is already stored in the proper
+            # standard field. Do not duplicate it.
+            continue
+
+        cleaned[key] = value
+
+    return cleaned
+
+
+# ============================================================
 # NORMALIZE EXTRACTED DATA
 # ============================================================
 
@@ -1241,6 +1572,8 @@ def normalize_extracted_data(
             data.get("tax_id")
         ),
 
+        "additional_info": {},
+
         "line_items": [],
 
         "subtotal_usd": data.get(
@@ -1255,6 +1588,99 @@ def normalize_extracted_data(
             "total_usd"
         ),
     }
+
+    raw_invoice_additional_info = data.get(
+        "additional_info",
+        {},
+    )
+
+    if not isinstance(
+        raw_invoice_additional_info,
+        dict,
+    ):
+        raw_invoice_additional_info = {}
+
+    cleaned_invoice_additional_info = {}
+
+    for key, value in raw_invoice_additional_info.items():
+
+        if key is None:
+            continue
+
+        key = str(key).strip()
+
+        if not key:
+            continue
+
+        if isinstance(
+            value,
+            (str, int, float, bool)
+        ) or value is None:
+
+            cleaned_invoice_additional_info[key] = value
+
+    cleaned_invoice_additional_info = (
+        _remove_standard_field_duplicates(
+            cleaned_invoice_additional_info,
+            normalized,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Safety check for a known header-association failure:
+    #
+    # If "Taker" was incorrectly assigned the sales order number
+    # while a proper salesperson value already exists, remove
+    # the incorrect dynamic copy. We do not invent or overwrite
+    # the standard salesperson field here.
+    # --------------------------------------------------------
+
+    taker_value = None
+
+    for key, value in (
+        cleaned_invoice_additional_info.items()
+    ):
+
+        if _normalize_dynamic_key(key) == "taker":
+            taker_value = value
+            break
+
+    if (
+        taker_value is not None
+        and normalized.get("salesperson") not in (None, "")
+        and normalized.get("sales_order_number") not in (None, "")
+        and _is_same_value(
+            taker_value,
+            normalized.get("sales_order_number"),
+        )
+    ):
+        cleaned_invoice_additional_info = {
+            key: value
+            for key, value
+            in cleaned_invoice_additional_info.items()
+            if _normalize_dynamic_key(key) != "taker"
+        }
+
+    # --------------------------------------------------------
+    # Remove empty/null dynamic invoice-level values.
+    #
+    # Example:
+    #   {"Sales Rep": None, "Shipping Method": "Delivery"}
+    #
+    # becomes:
+    #   {"Shipping Method": "Delivery"}
+    # --------------------------------------------------------
+
+    cleaned_invoice_additional_info = {
+        key: value
+        for key, value
+        in cleaned_invoice_additional_info.items()
+        if value not in (None, "")
+    }
+
+    normalized["additional_info"] = (
+        cleaned_invoice_additional_info
+    )
 
     line_items = data.get(
         "line_items",
@@ -1274,6 +1700,38 @@ def normalize_extracted_data(
             dict,
         ):
             continue
+
+        additional_info = item.get(
+            "additional_info",
+            {},
+        )
+
+        if not isinstance(
+            additional_info,
+            dict,
+        ):
+            additional_info = {{}}
+
+        cleaned_additional_info = {}
+
+        for key, value in additional_info.items():
+
+            if key is None:
+                continue
+
+            key = str(key).strip()
+
+            if not key:
+                continue
+
+            if (
+                isinstance(
+                    value,
+                    (str, int, float, bool)
+                )
+                and value != ""
+            ):
+                cleaned_additional_info[key] = value
 
         normalized_item = {
             "manufacturer_part_number":
@@ -1319,6 +1777,9 @@ def normalize_extracted_data(
                 item.get(
                     "uom_multiplier"
                 ),
+
+            "additional_info":
+                cleaned_additional_info,
         }
 
         normalized[
@@ -1343,7 +1804,9 @@ def extract_invoice_data(
     The supplier invoice layout can be completely different
     from one invoice to another.
 
-    The final Item Master structure remains standardized.
+    The standard Item Master fields remain stable while
+    additional line-item information is preserved dynamically
+    inside each item's additional_info object.
 
     Number of output rows = number of actual invoice line items.
     """
@@ -1377,6 +1840,29 @@ IMPORTANT EXTRACTION RULES:
 12. Keep the same number of line items as the CURRENT invoice.
 13. Return the actual vendor email address only.
 14. Do not return Markdown links for email addresses.
+15. Detect additional line-item columns that are not part of the
+    standard Item Master fields.
+16. Put those clearly supported line-item values into
+    additional_info.
+17. Do not use additional_info to replace standard fields.
+18. If no additional line-item information exists, return {{}}.
+19. Preserve additional field labels and values from the CURRENT
+    invoice.
+20. Do not invent or infer additional fields.
+21. Detect clearly labeled invoice-level information that does not
+    fit the standard invoice fields and put it in TOP-LEVEL
+    additional_info.
+22. If a standard field cannot be confidently mapped but the
+    CURRENT invoice clearly contains a labeled value, preserve
+    that value in top-level additional_info instead of discarding it.
+23. Do not use top-level additional_info to replace a standard
+    field when the standard field can be confidently populated.
+24. If there is no extra invoice-level information, use:
+    additional_info = {{}}.
+25. Preserve label-to-value associations from the CURRENT invoice.
+26. Never assign a numeric order/invoice/PO/customer ID value to
+    Taker, Sales Rep, or Salesperson when the invoice shows a
+    different labeled person value.
 
 
 ============================================================
@@ -1601,6 +2087,17 @@ printed, including leading zeros.
 
 Do not derive Quantity or Unit Price from Extended Price.
 
+For any extra table columns such as Qty Ordered or Back Ordered,
+keep them in additional_info instead of replacing
+quantity_shipped.
+
+Example:
+
+"additional_info": {{
+    "Qty Ordered": 40,
+    "Back Ordered": 10
+}}
+
 Use exactly this structure:
 
 {json.dumps(INVOICE_JSON_SCHEMA, indent=2)}
@@ -1614,12 +2111,7 @@ Use exactly this structure:
         model=MODEL_NAME,
         temperature=0,
         response_format={
-            "type": "json_schema",
-            "json_schema": {
-                "name": "invoice_extraction",
-                "strict": False,
-                "schema": INVOICE_JSON_SCHEMA,
-            },
+            "type": "json_object"
         },
         messages=[
             {
@@ -1681,3 +2173,735 @@ Use exactly this structure:
     return normalize_extracted_data(
         data
     )
+
+
+# ============================================================
+# VISION RESPONSE CLEANING
+# ============================================================
+
+def _clean_dynamic_dict(
+    value: Any,
+) -> dict[str, Any]:
+    """
+    Keep only real, non-empty dynamic values.
+    """
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        return {}
+
+    return {
+        str(key).strip(): item_value
+        for key, item_value in value.items()
+        if key is not None
+        and str(key).strip()
+        and item_value not in (
+            None,
+            "",
+        )
+    }
+
+
+def _clean_vision_fields(
+    value: Any,
+) -> dict[str, Any]:
+    """
+    Keep only non-empty standard visual fields.
+    """
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        return {}
+
+    return {
+        str(key).strip(): item_value
+        for key, item_value in value.items()
+        if key is not None
+        and str(key).strip()
+        and item_value not in (
+            None,
+            "",
+        )
+    }
+
+
+# ============================================================
+# HEADER VISION PASS
+# ============================================================
+
+def _extract_invoice_header_with_vision(
+    image_data_urls: list[str],
+) -> dict[str, Any]:
+    """
+    Vision pass focused on invoice/header information only.
+
+    The full invoice image is provided, but the task is limited
+    to header/customer/shipping/totals and other invoice-level
+    information.
+
+    It does NOT extract line items.
+    """
+
+    images = [
+        image
+        for image in image_data_urls
+        if isinstance(image, str)
+        and image.startswith("data:image/")
+    ][:5]
+
+    if not images:
+        raise ValueError(
+            "No valid invoice images were provided."
+        )
+
+    prompt = """
+Read the CURRENT invoice image(s).
+
+Focus ONLY on invoice-level/header information.
+
+Do NOT extract line items in this pass.
+
+Return ONLY valid JSON.
+
+Standard fields:
+- invoice_number
+- invoice_date
+- due_date
+- purchase_order_number
+- sales_order_number
+- customer_account_number
+- vendor_account_number
+- salesperson
+- order_date
+- ship_date
+- delivery_date
+- packing_slip_number
+- tracking_number
+
+Also capture clearly labeled invoice-level information that
+does not fit those standard fields in additional_info.
+
+Rules:
+1. Use only values visible in the current invoice image.
+2. Preserve exact values as printed.
+3. Keep each label attached to the correct value.
+4. Do not infer missing values.
+5. Do not copy information from another invoice.
+6. If a value is unclear, return null.
+7. Do not place line-item values into additional_info.
+8. Do not calculate values.
+
+Return exactly:
+
+{
+  "fields": {
+    "invoice_number": null,
+    "invoice_date": null,
+    "due_date": null,
+    "purchase_order_number": null,
+    "sales_order_number": null,
+    "customer_account_number": null,
+    "vendor_account_number": null,
+    "salesperson": null,
+    "order_date": null,
+    "ship_date": null,
+    "delivery_date": null,
+    "packing_slip_number": null,
+    "tracking_number": null
+  },
+  "additional_info": {}
+}
+"""
+
+    content_parts = [
+        {
+            "type": "text",
+            "text": prompt,
+        }
+    ]
+
+    for image in images:
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image,
+                },
+            }
+        )
+
+    response = client.chat.completions.create(
+        model=VISION_MODEL,
+        temperature=0,
+        max_completion_tokens=3000,
+        reasoning_effort="none",
+        reasoning_format="hidden",
+        response_format={
+            "type": "json_object"
+        },
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict invoice header "
+                    "vision extractor. Return only JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": content_parts,
+            },
+        ],
+    )
+
+    content = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    if not content:
+        raise ValueError(
+            "Header vision returned an empty response."
+        )
+
+    content = clean_json_response(
+        content
+    )
+
+    result = json.loads(
+        content
+    )
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise ValueError(
+            "Header vision returned invalid JSON."
+        )
+
+    return {
+        "fields": _clean_vision_fields(
+            result.get("fields")
+        ),
+        "additional_info": _clean_dynamic_dict(
+            result.get("additional_info")
+        ),
+    }
+
+
+# ============================================================
+# TABLE VISION PASS
+# ============================================================
+
+def _extract_line_items_with_vision(
+    image_data_urls: list[str],
+) -> dict[str, Any]:
+    """
+    Vision pass focused ONLY on the invoice item table.
+
+    The model must visually identify the table headers first,
+    then map each row using those column positions.
+
+    This is intended to reduce Qty/Price/Amount column swaps.
+    """
+
+    images = [
+        image
+        for image in image_data_urls
+        if isinstance(image, str)
+        and image.startswith("data:image/")
+    ][:5]
+
+    if not images:
+        raise ValueError(
+            "No valid invoice images were provided."
+        )
+
+    prompt = """
+Read the CURRENT invoice image(s).
+
+Focus ONLY on the ITEM TABLE / LINE-ITEM SECTION.
+
+Do not extract invoice header fields in this pass.
+
+First identify the actual table column headers and their
+left-to-right meanings.
+
+Then extract EVERY actual line item.
+
+STANDARD LINE-ITEM FIELDS:
+- manufacturer_part_number
+- vendor_part_number
+- description
+- quantity_shipped
+- uom
+- unit_price_usd
+- extended_price_usd
+
+RULES:
+
+1. Use the visual table column positions as the source of truth.
+2. Read the column headers before reading row values.
+3. Keep each value in the column where it is visually printed.
+4. Do NOT take numbers from inside the description as quantity.
+5. Do NOT calculate quantity from unit price or amount.
+6. Do NOT calculate unit price from amount.
+7. Do NOT calculate amount from quantity.
+8. Preserve part numbers exactly as printed.
+9. Preserve the full description.
+10. If the invoice has multiple quantity columns, identify the
+    column that represents quantity actually shipped and put
+    ONLY that column in quantity_shipped.
+11. Put other quantity columns such as Qty Ordered or Back Ordered
+    into that line item's additional_info.
+12. Any other clearly labeled line-item column that is not one of
+    the standard fields must go into that line item's
+    additional_info.
+13. If a line-item value is not readable, return null.
+14. Do not invent rows.
+15. Do not merge separate rows.
+16. Do not split one invoice row into multiple rows.
+17. Return one object per actual invoice line item.
+
+Return exactly:
+
+{
+  "line_items": [
+    {
+      "manufacturer_part_number": null,
+      "vendor_part_number": null,
+      "description": null,
+      "quantity_shipped": null,
+      "uom": null,
+      "unit_price_usd": null,
+      "extended_price_usd": null,
+      "additional_info": {}
+    }
+  ]
+}
+"""
+
+    content_parts = [
+        {
+            "type": "text",
+            "text": prompt,
+        }
+    ]
+
+    for image in images:
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image,
+                },
+            }
+        )
+
+    response = client.chat.completions.create(
+        model=VISION_MODEL,
+        temperature=0,
+        max_completion_tokens=5000,
+        reasoning_effort="none",
+        reasoning_format="hidden",
+        response_format={
+            "type": "json_object"
+        },
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict invoice table "
+                    "vision extractor. Return only JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": content_parts,
+            },
+        ],
+    )
+
+    content = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    if not content:
+        raise ValueError(
+            "Table vision returned an empty response."
+        )
+
+    content = clean_json_response(
+        content
+    )
+
+    result = json.loads(
+        content
+    )
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise ValueError(
+            "Table vision returned invalid JSON."
+        )
+
+    raw_items = result.get(
+        "line_items",
+        [],
+    )
+
+    if not isinstance(
+        raw_items,
+        list,
+    ):
+        raw_items = []
+
+    cleaned_items = []
+
+    for item in raw_items:
+
+        if not isinstance(
+            item,
+            dict,
+        ):
+            continue
+
+        cleaned_items.append(
+            {
+                "manufacturer_part_number":
+                    item.get(
+                        "manufacturer_part_number"
+                    ),
+
+                "vendor_part_number":
+                    item.get(
+                        "vendor_part_number"
+                    ),
+
+                "description":
+                    item.get(
+                        "description"
+                    ),
+
+                "quantity_shipped":
+                    item.get(
+                        "quantity_shipped"
+                    ),
+
+                "uom":
+                    item.get(
+                        "uom"
+                    ),
+
+                "unit_price_usd":
+                    item.get(
+                        "unit_price_usd"
+                    ),
+
+                "extended_price_usd":
+                    item.get(
+                        "extended_price_usd"
+                    ),
+
+                "additional_info":
+                    _clean_dynamic_dict(
+                        item.get(
+                            "additional_info"
+                        )
+                    ),
+            }
+        )
+
+    return {
+        "line_items": cleaned_items,
+    }
+
+
+# ============================================================
+# TWO-PASS VISION FALLBACK
+# ============================================================
+
+def extract_invoice_data_with_vision(
+    image_data_urls: list[str],
+    target_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Run two focused vision passes:
+
+        Pass 1:
+            Header / invoice-level information
+
+        Pass 2:
+            Line-item table
+
+    Both passes receive the actual invoice image(s).
+    """
+
+    header_result = (
+        _extract_invoice_header_with_vision(
+            image_data_urls
+        )
+    )
+
+    table_result = (
+        _extract_line_items_with_vision(
+            image_data_urls
+        )
+    )
+
+    return {
+        "fields": header_result.get(
+            "fields",
+            {},
+        ),
+        "additional_info": header_result.get(
+            "additional_info",
+            {},
+        ),
+        "line_items": table_result.get(
+            "line_items",
+            [],
+        ),
+        "uncertain_fields": [],
+    }
+
+
+
+# ============================================================
+# FOCUSED TABLE-ROW VISION VERIFICATION
+# ============================================================
+
+def verify_table_row_with_vision(
+    image_data_urls: list[str],
+    detected_columns: dict[str, Any],
+    detected_row: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Verify ONE dynamically detected table row against the
+    actual invoice image.
+
+    This is intentionally a small vision request.
+
+    The local table detector has already identified:
+        - the table headers
+        - the column positions
+        - the candidate row
+
+    Qwen is only asked to confirm/correct that single row.
+
+    This minimizes token usage compared with re-extracting the
+    entire invoice through vision.
+    """
+
+    if not image_data_urls:
+        raise ValueError(
+            "No invoice images were provided."
+        )
+
+    images = [
+        image
+        for image in image_data_urls
+        if isinstance(image, str)
+        and image.startswith("data:image/")
+    ][:3]
+
+    if not images:
+        raise ValueError(
+            "No valid invoice image data URLs were provided."
+        )
+
+    prompt = f"""
+Verify ONE invoice table row against the CURRENT invoice image.
+
+The local table detector found these headers/columns:
+
+{json.dumps(detected_columns, ensure_ascii=False)}
+
+The local detector found this row:
+
+{json.dumps(detected_row, ensure_ascii=False)}
+
+Do NOT re-extract the whole invoice.
+
+Only verify THIS ROW.
+
+Check:
+- vendor/item/part number
+- description
+- quantity shipped
+- UOM
+- unit price
+- extended price
+- any extra table columns
+
+IMPORTANT:
+
+1. Use the actual invoice image as the source of truth.
+2. Read the table header and this row visually.
+3. Do not move a number from the description into quantity unless
+   the image clearly proves that it belongs to the quantity column.
+4. Do not move a quantity into the description unless the image
+   clearly proves that it belongs there.
+5. Do not calculate missing values.
+6. Do not guess.
+7. Preserve exact printed text where readable.
+8. Keep extra columns in additional_info.
+9. Return one corrected row only.
+
+Return ONLY valid JSON:
+
+{{
+  "status": "PASS",
+  "corrected_row": {{
+    "manufacturer_part_number": null,
+    "vendor_part_number": null,
+    "description": null,
+    "quantity_shipped": null,
+    "uom": null,
+    "unit_price_usd": null,
+    "extended_price_usd": null,
+    "additional_info": {{}}
+  }},
+  "changes": [],
+  "reason": ""
+}}
+
+status must be:
+- PASS if the detected row is correct
+- CORRECTED if one or more values are changed
+- REVIEW if the image is too ambiguous to determine the correct value
+"""
+
+    content_parts: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": prompt,
+        }
+    ]
+
+    for image in images:
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image,
+                },
+            }
+        )
+
+    response = client.chat.completions.create(
+        model=VISION_MODEL,
+        temperature=0,
+        max_completion_tokens=2500,
+        reasoning_effort="none",
+        reasoning_format="hidden",
+        response_format={
+            "type": "json_object"
+        },
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict invoice table-row "
+                    "verification system. Return only JSON."
+                ),
+            },
+            {
+                "role": "user",
+                "content": content_parts,
+            },
+        ],
+    )
+
+    content = (
+        response
+        .choices[0]
+        .message
+        .content
+    )
+
+    if not content:
+        raise ValueError(
+            "Table-row vision returned an empty response."
+        )
+
+    content = clean_json_response(
+        content
+    )
+
+    result = json.loads(
+        content
+    )
+
+    if not isinstance(
+        result,
+        dict,
+    ):
+        raise ValueError(
+            "Table-row vision returned invalid JSON."
+        )
+
+    corrected_row = result.get(
+        "corrected_row",
+        {},
+    )
+
+    if not isinstance(
+        corrected_row,
+        dict,
+    ):
+        corrected_row = {}
+
+    corrected_row.setdefault(
+        "additional_info",
+        {}
+    )
+
+    if not isinstance(
+        corrected_row.get(
+            "additional_info"
+        ),
+        dict,
+    ):
+        corrected_row[
+            "additional_info"
+        ] = {}
+
+    changes = result.get(
+        "changes",
+        [],
+    )
+
+    if not isinstance(
+        changes,
+        list,
+    ):
+        changes = []
+
+    return {
+        "status": result.get(
+            "status",
+            "REVIEW",
+        ),
+        "corrected_row": corrected_row,
+        "changes": changes,
+        "reason": str(
+            result.get(
+                "reason",
+                "",
+            )
+            or ""
+        ),
+    }

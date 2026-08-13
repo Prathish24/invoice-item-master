@@ -1,4 +1,5 @@
 import csv
+import json
 from io import BytesIO, StringIO
 from typing import Any
 
@@ -308,10 +309,140 @@ def _active_columns(
         or ITEM_MASTER_COLUMNS
     )
 
+    # --------------------------------------------------------
+    # Dynamic additional information
+    #
+    # This is a single stable export column. It combines:
+    #   - invoice_additional_info
+    #   - line-item additional_info
+    #
+    # Different invoices can therefore carry different extra fields
+    # without changing the CSV schema for every supplier.
+    # --------------------------------------------------------
+
+    has_dynamic_additional_info = any(
+        isinstance(
+            row.get("invoice_additional_info"),
+            dict,
+        )
+        and bool(
+            row.get("invoice_additional_info")
+        )
+        or isinstance(
+            row.get("additional_info"),
+            dict,
+        )
+        and bool(
+            row.get("additional_info")
+        )
+        for row in export_rows
+    )
+
+    dynamic_columns = (
+        [
+            (
+                "Additional Information",
+                "additional_information",
+            )
+        ]
+        if has_dynamic_additional_info
+        else []
+    )
+
     return (
         FIXED_COLUMNS
         + active_additional_columns
+        + dynamic_columns
         + active_item_columns
+    )
+
+
+# ============================================================
+# DYNAMIC ADDITIONAL INFORMATION
+# ============================================================
+
+def _build_additional_information(
+    row: dict[str, Any],
+) -> str:
+    """
+    Combine invoice-level and line-item dynamic information
+    into one stable export value.
+
+    The source dictionaries are preserved as JSON text so keys
+    and values are not silently lost.
+    """
+
+    combined: dict[str, Any] = {}
+
+    invoice_info = row.get(
+        "invoice_additional_info"
+    )
+
+    if isinstance(
+        invoice_info,
+        dict,
+    ):
+
+        for key, value in invoice_info.items():
+
+            if key is None:
+                continue
+
+            key = str(
+                key
+            ).strip()
+
+            if not key:
+                continue
+
+            if value in (
+                None,
+                "",
+            ):
+                continue
+
+            combined[
+                f"invoice:{key}"
+            ] = value
+
+    line_info = row.get(
+        "additional_info"
+    )
+
+    if isinstance(
+        line_info,
+        dict,
+    ):
+
+        for key, value in line_info.items():
+
+            if key is None:
+                continue
+
+            key = str(
+                key
+            ).strip()
+
+            if not key:
+                continue
+
+            if value in (
+                None,
+                "",
+            ):
+                continue
+
+            combined[
+                f"line:{key}"
+            ] = value
+
+    if not combined:
+        return ""
+
+    return json.dumps(
+        combined,
+        ensure_ascii=False,
+        default=str,
     )
 
 
@@ -391,6 +522,16 @@ def build_item_master_workbook(
         export_rows,
         start=2,
     ):
+
+        item = dict(
+            item
+        )
+
+        item[
+            "additional_information"
+        ] = _build_additional_information(
+            item
+        )
 
         for col_index, (
             _header,
@@ -500,7 +641,17 @@ def build_item_master_csv(
     # Rows
     # --------------------------------------------------------
 
-    for item in export_rows:
+    for raw_item in export_rows:
+
+        item = dict(
+            raw_item
+        )
+
+        item[
+            "additional_information"
+        ] = _build_additional_information(
+            item
+        )
 
         writer.writerow(
             [
